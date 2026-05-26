@@ -11,6 +11,9 @@ import copy
 import numpy as np
 import random
 import math
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+import os
 
 pad=np.array([-1000]*52)
 
@@ -65,6 +68,22 @@ def main():
     classifier=classifier.to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('total parameters:', total_params)
+
+    run_name = "pretrain_{}{}{}{}_{}".format(
+        "N" if args.normal else "n",
+        "T" if args.time_embedding else "t",
+        "A" if args.adversarial else "a",
+        "R" if args.random_mask_percent else "F{}".format(int(args.mask_percent*100)),
+        datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    log_dir = os.path.join("./runs", run_name)
+    writer = SummaryWriter(log_dir=log_dir)
+    print("[TensorBoard] log dir:", log_dir)
+    print("[TensorBoard] start UI with:  tensorboard --logdir ./runs --port 6006")
+    writer.add_text("config/args", str(vars(args)))
+    writer.add_text("config/device", str(device))
+    writer.add_scalar("config/total_params", total_params, 0)
+
     optim = AdamW(list(model.parameters()) + list(classifier.parameters()), lr=args.lr, weight_decay=0.01)
     # train_data,test_data=load_zero_people(args.test_people)
     train_data=load_all(magnitude_path=args.data_path)
@@ -246,11 +265,20 @@ def main():
             error = torch.sum(torch.abs(y - x) / x * loss_mask) / torch.sum(loss_mask)
             mse_list.append(current_mse.item())
             err_list.append(error.item())
-        log = "Epoch {} | Train Loss {:06f}, Train MAPE {:06f}, Train MSE {:06f}, ".format(j, np.mean(loss_list),np.mean(err_list),np.mean(mse_list))
+        train_loss, train_mape, train_mse = np.mean(loss_list), np.mean(err_list), np.mean(mse_list)
+        train_tm, train_tt, train_fm, train_ft = np.mean(truth_mask), np.mean(truth_total), np.mean(false_mask), np.mean(false_total)
+        log = "Epoch {} | Train Loss {:06f}, Train MAPE {:06f}, Train MSE {:06f}, ".format(j, train_loss, train_mape, train_mse)
         print(log)
-        print("Discrimination | Truth(Mask) {:06f}, Truth(Total) {:06f}, False(Mask) {:06f}, False(Total) {:06f}".format(np.mean(truth_total),np.mean(truth_mask),np.mean(false_total),np.mean(false_mask)))
+        print("Discrimination | Truth(Mask) {:06f}, Truth(Total) {:06f}, False(Mask) {:06f}, False(Total) {:06f}".format(train_tm, train_tt, train_fm, train_ft))
         with open("Pretrain.txt", 'a') as file:
             file.write(log)
+        writer.add_scalar("loss/train", train_loss, j)
+        writer.add_scalar("mape/train", train_mape, j)
+        writer.add_scalar("mse/train", train_mse, j)
+        writer.add_scalar("disc/truth_mask", train_tm, j)
+        writer.add_scalar("disc/truth_total", train_tt, j)
+        writer.add_scalar("disc/false_mask", train_fm, j)
+        writer.add_scalar("disc/false_total", train_ft, j)
 
         model.eval()
         torch.set_grad_enabled(False)
@@ -403,6 +431,13 @@ def main():
             file.write(log + "\n")
 
         mape,mse,loss=np.mean(err_list), np.mean(mse_list),np.mean(loss_list)
+        writer.add_scalar("loss/valid", loss, j)
+        writer.add_scalar("mape/valid", mape, j)
+        writer.add_scalar("mse/valid", mse, j)
+        writer.add_scalar("disc_valid/truth_mask", np.mean(truth_mask), j)
+        writer.add_scalar("disc_valid/truth_total", np.mean(truth_total), j)
+        writer.add_scalar("disc_valid/false_mask", np.mean(false_mask), j)
+        writer.add_scalar("disc_valid/false_total", np.mean(false_total), j)
         if mape<best_mape or mse<best_mse or loss<best_loss:
             torch.save(csibert.state_dict(), "csibert_pretrain.pth")
             torch.save(model.state_dict(), "pretrain.pth")
@@ -421,9 +456,18 @@ def main():
             loss_epoch=0
         else:
             loss_epoch+=1
+        writer.add_scalar("best/mape", best_mape, j)
+        writer.add_scalar("best/mse", best_mse, j)
+        writer.add_scalar("best/loss", best_loss, j)
+        writer.add_scalar("counters/mape_epoch", mape_epoch, j)
+        writer.add_scalar("counters/mse_epoch", mse_epoch, j)
+        writer.add_scalar("counters/loss_epoch", loss_epoch, j)
+        writer.flush()
         if mape_epoch>=args.epoch and mse_epoch>args.epoch and loss_epoch>args.epoch:
             break
         print("MAPE Epoch {:}, MSE Epoch {:}, Loss Epcoh {:}".format(mape_epoch,mse_epoch,loss_epoch))
+
+    writer.close()
 
 
 if __name__ == '__main__':
