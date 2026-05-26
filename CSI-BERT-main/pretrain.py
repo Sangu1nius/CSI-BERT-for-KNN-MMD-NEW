@@ -1,5 +1,6 @@
 from model import CSIBERT,Token_Classifier,Sequence_Classifier
-from transformers import BertConfig,AdamW
+from transformers import BertConfig
+from torch.optim import AdamW
 import argparse
 import tqdm
 import torch
