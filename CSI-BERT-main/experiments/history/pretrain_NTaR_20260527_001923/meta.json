@@ -1,0 +1,33 @@
+{
+  "run_name": "pretrain_NTaR_20260527_001923",
+  "args": {
+    "batch_size": 64,
+    "mask_percent": 0.15,
+    "random_mask_percent": true,
+    "normal": true,
+    "hs": 64,
+    "layers": 4,
+    "max_len": 100,
+    "intermediate_size": 128,
+    "heads": 4,
+    "position_embedding_type": "absolute",
+    "time_embedding": true,
+    "cpu": false,
+    "cuda": "0",
+    "carrier_dim": 52,
+    "carrier_attn": false,
+    "adversarial": false,
+    "lr": 0.0005,
+    "epoch": 30,
+    "data_path": "./data/magnitude.npy",
+    "parameter": null
+  },
+  "best_mape": 0.12257034828265508,
+  "best_test_mape": 0.12257,
+  "final_test_mape": 0.123973,
+  "best_mse": 3.7914134661356607,
+  "best_loss": 6.391444683074951,
+  "total_epochs": 470,
+  "timestamp": "2026-05-27T00:48:56.618837",
+  "tensorboard_log_dir": "./runs/pretrain_NTaR_20260527_001923"
+}
