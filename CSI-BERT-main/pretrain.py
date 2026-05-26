@@ -15,6 +15,9 @@ import math
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import os
+import json
+import shutil
+import re
 
 pad=np.array([-1000]*52)
 
@@ -84,6 +87,13 @@ def main():
     writer.add_text("config/args", str(vars(args)))
     writer.add_text("config/device", str(device))
     writer.add_scalar("config/total_params", total_params, 0)
+
+    archive_dir = os.path.join("./experiments/history", run_name)
+    os.makedirs(archive_dir, exist_ok=True)
+    log_file = os.path.join(archive_dir, "Pretrain.txt")
+    csibert_ckpt = os.path.join(archive_dir, "csibert_pretrain.pth")
+    model_ckpt = os.path.join(archive_dir, "pretrain.pth")
+    print("[Archive] 训练产物目录:", archive_dir)
 
     optim = AdamW(list(model.parameters()) + list(classifier.parameters()), lr=args.lr, weight_decay=0.01)
     # train_data,test_data=load_zero_people(args.test_people)
@@ -271,7 +281,7 @@ def main():
         log = "Epoch {} | Train Loss {:06f}, Train MAPE {:06f}, Train MSE {:06f}, ".format(j, train_loss, train_mape, train_mse)
         print(log)
         print("Discrimination | Truth(Mask) {:06f}, Truth(Total) {:06f}, False(Mask) {:06f}, False(Total) {:06f}".format(train_tm, train_tt, train_fm, train_ft))
-        with open("Pretrain.txt", 'a') as file:
+        with open(log_file, 'a') as file:
             file.write(log)
         writer.add_scalar("loss/train", train_loss, j)
         writer.add_scalar("mape/train", train_mape, j)
@@ -428,7 +438,7 @@ def main():
         log = "Test Loss {:06f}, Test MAPE {:06f}, Test MSE {:06f} ".format(np.mean(loss_list), np.mean(err_list), np.mean(mse_list))
         print(log)
         print("Discrimination | Truth(Mask) {:06f}, Truth(Total) {:06f}, False(Mask) {:06f}, False(Total) {:06f}".format(np.mean(truth_total),np.mean(truth_mask),np.mean(false_total),np.mean(false_mask)))
-        with open("Pretrain.txt", 'a') as file:
+        with open(log_file, 'a') as file:
             file.write(log + "\n")
 
         mape,mse,loss=np.mean(err_list), np.mean(mse_list),np.mean(loss_list)
@@ -440,8 +450,8 @@ def main():
         writer.add_scalar("disc_valid/false_mask", np.mean(false_mask), j)
         writer.add_scalar("disc_valid/false_total", np.mean(false_total), j)
         if mape<best_mape or mse<best_mse or loss<best_loss:
-            torch.save(csibert.state_dict(), "csibert_pretrain.pth")
-            torch.save(model.state_dict(), "pretrain.pth")
+            torch.save(csibert.state_dict(), csibert_ckpt)
+            torch.save(model.state_dict(), model_ckpt)
         if mape<best_mape:
             best_mape=mape
             mape_epoch=0
@@ -467,6 +477,60 @@ def main():
         if mape_epoch>=args.epoch and mse_epoch>args.epoch and loss_epoch>args.epoch:
             break
         print("MAPE Epoch {:}, MSE Epoch {:}, Loss Epcoh {:}".format(mape_epoch,mse_epoch,loss_epoch))
+
+    try:
+        with open(log_file) as f:
+            log_text = f.read()
+        test_mapes = [float(m.group(1)) for m in re.finditer(r'Test MAPE ([\d.]+)', log_text)]
+        best_test_mape = min(test_mapes) if test_mapes else 1.0
+        final_test_mape = test_mapes[-1] if test_mapes else 1.0
+        total_epochs = len(test_mapes)
+    except Exception:
+        best_test_mape = 1.0
+        final_test_mape = 1.0
+        total_epochs = 0
+
+    meta = {
+        "run_name": run_name,
+        "args": {k: (list(v) if isinstance(v, list) else v) for k, v in vars(args).items()},
+        "best_mape": best_mape,
+        "best_test_mape": best_test_mape,
+        "final_test_mape": final_test_mape,
+        "best_mse": best_mse,
+        "best_loss": best_loss,
+        "total_epochs": total_epochs,
+        "timestamp": datetime.now().isoformat(),
+        "tensorboard_log_dir": log_dir,
+    }
+    with open(os.path.join(archive_dir, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2, default=str, ensure_ascii=False)
+    print("[Archive] {} 归档完成 | best test mape = {:.6f}".format(run_name, best_test_mape))
+
+    best_dir = "./experiments/best"
+    os.makedirs(best_dir, exist_ok=True)
+    best_meta_path = os.path.join(best_dir, "meta.json")
+    existing_best = 1.0
+    existing_run = "(none)"
+    if os.path.exists(best_meta_path):
+        try:
+            with open(best_meta_path) as f:
+                bm = json.load(f)
+                existing_best = bm.get("best_test_mape", 1.0)
+                existing_run = bm.get("run_name", "(none)")
+        except Exception:
+            pass
+
+    if best_test_mape < existing_best:
+        for src_path in [log_file, csibert_ckpt, model_ckpt]:
+            if os.path.exists(src_path):
+                shutil.copy(src_path, best_dir)
+        with open(best_meta_path, "w") as f:
+            json.dump(meta, f, indent=2, default=str, ensure_ascii=False)
+        print("[Archive] *** NEW BEST! *** {:.6f} < {:.6f} (prev: {})".format(
+            best_test_mape, existing_best, existing_run))
+    else:
+        print("[Archive] not new best ({:.6f} >= {:.6f}, current best: {})".format(
+            best_test_mape, existing_best, existing_run))
 
     writer.close()
 
